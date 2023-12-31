@@ -1,4 +1,5 @@
-use std::{net::TcpListener, io::{Read, Write}, collections::HashMap, thread};
+use clap::Parser;
+use std::{net::TcpListener, io::{Read, Write}, collections::HashMap, thread, fs};
 
 //
 //  CONSTANTS
@@ -11,7 +12,19 @@ const NEW_LINE_SEQ: &'static str = "\r\n";
 
 const OK_200: &'static str = "HTTP/1.1 200 OK\r\n";
 const NOT_FOUND_404: &'static str = "HTTP/1.1 404 NOT FOUND\r\n";
+
 const CONTENT_TYPE_PLAIN: &'static str = "Content-Type: text/plain\r\n";
+const CONTENT_TYPE_OCTET: &'static str = "Content-Type: application/octet-stream\r\n";
+
+//
+//  CLAP
+//
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)]
+    directory: Option<String>,
+}
 
 //
 //  MAIN FUNCTION
@@ -23,10 +36,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     for stream in listener.incoming() {
         match stream {
-            // TODO: Handle this in a concurrent/threaded way
             Ok(mut s) => {
                 println!("Accepted new connection");
-
                 thread::spawn(move || {
                     let mut buf = [0; BUFFER_SIZE];
                     let response = match s.read(&mut buf) {
@@ -51,6 +62,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Incoming request handler for client.
 fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
+    let args = Args::parse();
+    println!("Command Line Args: {:?}", args);
+
     let headers = parse_headers(&buf);
     println!("Buffer: {:?}", headers);
 
@@ -65,10 +79,18 @@ fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
             OK_200.to_string()
         } else if path.starts_with("/echo") {
             let echo_str = path.strip_prefix("/echo/").unwrap();
-            response_with_data(OK_200, &echo_str)
+            response_with_data(OK_200, CONTENT_TYPE_PLAIN, &echo_str)
         } else if path.starts_with("/user-agent") {
             let user_agent = headers_map.get("User-Agent").expect("expected User-Agent header to be present");
-            response_with_data(OK_200, &user_agent)
+            response_with_data(OK_200, CONTENT_TYPE_PLAIN, &user_agent)
+        } else if path.starts_with("/files") {
+            let file_name = path.split("/").last().expect("no file name passed in path");
+            let file_dir = args.directory.expect("no file directory provided");
+            let file_path = format!("{}{}", file_dir, file_name);
+            match fs::read_to_string(&file_path) {
+                Ok(data) => response_with_data(OK_200, CONTENT_TYPE_OCTET, &data),
+                Err(_) => NOT_FOUND_404.to_string()
+            }
         } else {
             NOT_FOUND_404.to_string()
         }
@@ -95,7 +117,7 @@ fn parse_headers(buffer: &[u8]) -> Vec<String> {
             return lines;
         },
         Err(_) => {
-            panic!("Failed to parse lines buffer");
+            panic!("failed to parse lines buffer");
         }
     }
 }
@@ -107,9 +129,9 @@ fn extract_path(line: &String) -> String {
 }
 
 /// Append data to response.
-fn response_with_data(response: &str, data: &str) -> String {
+fn response_with_data(response: &str, content_type: &str, data: &str) -> String {
     let mut response_with_content = String::from(response);
-    response_with_content.push_str(CONTENT_TYPE_PLAIN);
+    response_with_content.push_str(content_type);
     response_with_content.push_str(format!("Content-Length: {}{}", data.as_bytes().len(), SECTION_END_SEQ).as_str());
     response_with_content.push_str(format!("{}{}", data, NEW_LINE_SEQ).as_str());
     response_with_content
