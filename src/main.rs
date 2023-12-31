@@ -1,4 +1,4 @@
-use std::{net::TcpListener, io::{Read, Write}, collections::HashMap};
+use std::{net::TcpListener, io::{Read, Write}, collections::HashMap, thread};
 
 //
 //  CONSTANTS
@@ -23,16 +23,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     for stream in listener.incoming() {
         match stream {
+            // TODO: Handle this in a concurrent/threaded way
             Ok(mut s) => {
                 println!("Accepted new connection");
 
-                let mut buf = [0; BUFFER_SIZE];
-                let response = match s.read(&mut buf) {
-                    Ok(_) =>  handle_incoming_request(&buf)?,
-                    Err(_) => panic!("failed to read connection data into buffer"),
-                };
-
-                s.write(response.as_bytes()).unwrap();
+                thread::spawn(move || {
+                    let mut buf = [0; BUFFER_SIZE];
+                    let response = match s.read(&mut buf) {
+                        Ok(_) =>  handle_incoming_request(&buf).expect("failed to handle incoming request"),
+                        Err(_) => panic!("failed to read connection data into buffer"),
+                    };
+                    s.write(response.as_bytes()).unwrap();
+                });
             }
             Err(_) => {
                 panic!("failed to read incoming tcp stream");
