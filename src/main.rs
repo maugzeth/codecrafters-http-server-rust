@@ -1,4 +1,4 @@
-use std::{net::TcpListener, io::{Read, Write}};
+use std::{net::TcpListener, io::{Read, Write}, collections::HashMap};
 
 //
 //  CONSTANTS
@@ -49,18 +49,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Incoming request handler for client.
 fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
-    let lines = parse_lines(&buf);
-    println!("Buffer: {:?}", lines);
+    let headers = parse_headers(&buf);
+    println!("Buffer: {:?}", headers);
+
+    let headers_map = headers_to_map(&headers);
+    println!("Headers Map: {:?}", headers_map);
     
-    let path = extract_path(&lines[0]);
+    let path = extract_path(&headers[0]);
     println!("Path: {:?}", path);
 
     let mut response = {
         if path == "/" {
             OK_200.to_string()
-        } else if path.starts_with("/echo/") {
+        } else if path.starts_with("/echo") {
             let echo_str = path.strip_prefix("/echo/").unwrap();
             response_with_data(OK_200, &echo_str)
+        } else if path.starts_with("/user-agent") {
+            let user_agent = headers_map.get("User-Agent").expect("expected User-Agent header to be present");
+            response_with_data(OK_200, &user_agent)
         } else {
             NOT_FOUND_404.to_string()
         }
@@ -74,7 +80,7 @@ fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
 }
 
 /// Parses incoming request buffer bytes into line of UTF-8 encoded strings.
-fn parse_lines(buffer: &[u8]) -> Vec<String> {
+fn parse_headers(buffer: &[u8]) -> Vec<String> {
     match String::from_utf8(buffer.to_vec()) {
         Ok(raw_string) => {
             let mut lines: Vec<String> = raw_string
@@ -105,4 +111,16 @@ fn response_with_data(response: &str, data: &str) -> String {
     response_with_content.push_str(format!("Content-Length: {}{}", data.as_bytes().len(), SECTION_END_SEQ).as_str());
     response_with_content.push_str(format!("{}{}", data, NEW_LINE_SEQ).as_str());
     response_with_content
+}
+
+/// Converts raw header strings into hash map.
+fn headers_to_map(headers: &Vec<String>) -> HashMap<String, String> {
+    let mut header_map: HashMap<String, String> = HashMap::new();
+    headers.iter().for_each(|h| {
+        match h.split_once(":") {
+            Some(s) => header_map.insert(s.0.to_string(), s.1.trim().to_string()),
+            None => header_map.insert(h.clone(), String::new())
+        };
+    });
+    header_map
 }
