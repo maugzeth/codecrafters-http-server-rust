@@ -1,9 +1,6 @@
 use clap::Parser;
+use itertools::Itertools;
 use std::{net::TcpListener, io::{Read, Write}, collections::HashMap, thread, fs};
-
-//
-//  CONSTANTS
-//
 
 const BUFFER_SIZE: usize = 1024;
 
@@ -11,14 +8,11 @@ const SECTION_END_SEQ: &'static str = "\r\n\r\n";
 const NEW_LINE_SEQ: &'static str = "\r\n";
 
 const OK_200: &'static str = "HTTP/1.1 200 OK\r\n";
+const OK_201: &'static str = "HTTP/1.1 201 OK\r\n";
 const NOT_FOUND_404: &'static str = "HTTP/1.1 404 NOT FOUND\r\n";
 
 const CONTENT_TYPE_PLAIN: &'static str = "Content-Type: text/plain\r\n";
 const CONTENT_TYPE_OCTET: &'static str = "Content-Type: application/octet-stream\r\n";
-
-//
-//  CLAP
-//
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -26,18 +20,16 @@ struct Args {
     directory: Option<String>,
 }
 
-//
-//  MAIN FUNCTION
-// 
+enum HttpMethod {
+    GET,
+    POST
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Logs from your program will appear here!");
-
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
-                println!("Accepted new connection");
                 thread::spawn(move || {
                     let mut buf = [0; BUFFER_SIZE];
                     let response = match s.read(&mut buf) {
@@ -56,23 +48,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-//
-//  UTILITIES
-//
-
 /// Incoming request handler for client.
 fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
     let args = Args::parse();
-    println!("Command Line Args: {:?}", args);
-
     let headers = parse_headers(&buf);
-    println!("Buffer: {:?}", headers);
-
     let headers_map = headers_to_map(&headers);
-    println!("Headers Map: {:?}", headers_map);
-    
     let path = extract_path(&headers[0]);
-    println!("Path: {:?}", path);
 
     let mut response = {
         if path == "/" {
@@ -87,9 +68,17 @@ fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
             let file_name = path.split("/").last().expect("no file name passed in path");
             let file_dir = args.directory.expect("no file directory provided");
             let file_path = format!("{}{}", file_dir, file_name);
-            match fs::read_to_string(&file_path) {
-                Ok(data) => response_with_data(OK_200, CONTENT_TYPE_OCTET, &data),
-                Err(_) => NOT_FOUND_404.to_string()
+            let http_method = get_http_method(&headers[0]);
+
+            match http_method {
+                HttpMethod::GET => match fs::read_to_string(&file_path) {
+                    Ok(data) => response_with_data(OK_200, CONTENT_TYPE_OCTET, &data),
+                    Err(_) => NOT_FOUND_404.to_string()
+                },
+                HttpMethod::POST => match fs::write(&file_path, parse_body(&buf)) {
+                    Ok(_) =>  OK_201.to_string(),
+                    Err(_) => NOT_FOUND_404.to_string()
+                }
             }
         } else {
             NOT_FOUND_404.to_string()
@@ -99,7 +88,6 @@ fn handle_incoming_request(buf: &[u8]) -> Result<String, String> {
     // Add EOL equivelant for response
     response.push_str("\r\n");
 
-    println!("Response: {:?}", response);
     Ok(response)
 }
 
@@ -115,6 +103,19 @@ fn parse_headers(buffer: &[u8]) -> Vec<String> {
             // Remove the last line which is just padding of zeros from buffer
             lines.pop();
             return lines;
+        },
+        Err(_) => {
+            panic!("failed to parse lines buffer");
+        }
+    }
+}
+
+/// Parses incoming request body from buffer.
+fn parse_body(buffer: &[u8]) -> String {
+    match String::from_utf8(buffer.to_vec()) {
+        Ok(raw_string) => {
+            let body = raw_string.split("\r\n\r\n").collect_vec()[1];
+            body.trim_matches('\0').to_string()
         },
         Err(_) => {
             panic!("failed to parse lines buffer");
@@ -147,4 +148,12 @@ fn headers_to_map(headers: &Vec<String>) -> HashMap<String, String> {
         };
     });
     header_map
+}
+
+fn get_http_method(header: &String) -> HttpMethod {
+    match header.split(" ").collect_vec()[0] {
+        "POST" => HttpMethod::POST,
+        "GET" => HttpMethod::GET,
+        _ => panic!("unsupported http method used")
+    }
 }
